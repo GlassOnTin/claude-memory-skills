@@ -98,3 +98,40 @@ The skills assume the standard Claude Code layout:
 - **One known limitation:** `lint` can't tell an example `[[link]]` written in
   prose from a real one — don't write a literal `[[X]]` in a memory body unless
   `X` is a real memory.
+
+## How it came about
+
+This started from a single failure. An agent doing a routine task in a repo —
+"commit and push this" — created a feature branch, contradicting a standing
+"commit directly on main, don't branch" rule the maintainer had set. The rule
+existed as a memory, but the `MEMORY.md` index had grown past the loader's cap
+(281 lines / ~69 KB) and was being truncated on load, so that entry was simply
+absent from context. The rule was there; it just never arrived.
+
+The fix came in layers, each exposing the next:
+
+- **Retrieval first** (`recall`) — pull the memories relevant to a task even when
+  the index truncated. Its first version missed the very rule that motivated it;
+  tuning it to prioritise memories that govern the *mechanics* of an action over
+  topically-loud neighbours fixed that.
+- **Then the index itself** (`memory-reindex`) — the flat catch-all was reshelved
+  into topics, which surfaced 6 memories with no index entry at all (invisible to
+  every session) and one classifier that confidently misreported its own coverage
+  — hence the `comm`-vs-`ls` gate that doesn't trust self-reports.
+- **Then size** (`memory-compact`) — reshelving didn't shrink anything (hooks
+  copied verbatim); the bloat was the hooks themselves, 3–5× their own length
+  guideline. Body-verified compaction roughly halved the index.
+- **Then consistency** — fixing titles and wiring cross-links exposed that the
+  link graph rested on inconsistent `name:` fields; a normalisation pass made
+  `name == stem` everywhere so links resolve by filename.
+- **Then "is this actually repeatable?"** — it wasn't: compaction's chunking
+  wasn't codified, reindex re-introduced slug titles, and nothing *asserted* the
+  invariants. That gap became `memory-lint` and the lifecycle hooks that run it.
+
+A recurring analogy shaped the order: sleep consolidation is staged — light,
+frequent filing feeds rarer, deeper integration and abstraction. The toolkit
+mirrors that: cheap-frequent (`recall`, `lint`) vs expensive-rare (`reindex`,
+`compact`, plus a one-off pass that distils recurring incidents into higher-order
+schemas). The guiding rule throughout was to verify rather than trust — every
+pass checks its own output mechanically, because a plausible-but-wrong
+self-report is exactly how the original rule went missing.
