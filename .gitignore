@@ -1,0 +1,12 @@
+# Never commit actual memory content — only the tooling lives here.
+MEMORY.md
+CANDIDATES.md
+memory/
+.backups/
+*.md.bak*
+memory-lint.log
+
+# Python / OS cruft
+__pycache__/
+*.pyc
+.DS_Store

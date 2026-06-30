@@ -1,0 +1,24 @@
+{
+  "hooks": {
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{ printf '\\n=== %s ===\\n' \"$(date -Iseconds)\"; python3 \"$HOME/.claude/skills/memory-lint/lint.py\" \"$HOME/.claude/projects/$(printf %s \"${CLAUDE_PROJECT_DIR:-$PWD}\" | sed 's#/#-#g')/memory\" --fix; } >> \"$HOME/.claude/memory-lint.log\" 2>&1 || true"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOME/.claude/skills/memory-lint/lint.py\" \"$HOME/.claude/projects/$(printf %s \"${CLAUDE_PROJECT_DIR:-$PWD}\" | sed 's#/#-#g')/memory\" --brief 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}
