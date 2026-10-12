@@ -1,71 +1,57 @@
 ---
 name: memory-compact
-description: Shrink the MEMORY.md index by tightening over-length hooks to one true line, so the always-loaded index fits the harness's memory-loader cap and stops truncating. Lossy where reindex is lossless — so it is body-verified: a hook is shortened ONLY when its detail is recoverable from the memory's own file; hooks carrying index-only detail are kept verbatim and flagged, never silently dropped, and no memory file is edited. Backs up and shows before/after before replacing. Run after reindex when the index is still over budget.
+description: Shrink over-length hooks in the MEMORY.md index while verifying fact recoverability from the underlying memory bodies. Parallelizes across subagents, validates canaries, and creates timestamped backups. Run when the index is over the target size threshold.
 ---
 
 # memory-compact
 
-`reindex` reorganises but copies hooks **verbatim**, so it doesn't change size —
-the index truncates because individual hooks have bloated to 3–5× the index's
-own "~200 chars" rule. Compaction tightens the *pointers*. The fact lives in the
-memory's file; the hook is only a pointer to it.
+`reindex` reorganizes the index losslessly without modifying hook text. When individual hooks bloat past ~250 chars, `memory-compact` tightens the pointers.
 
-**The one rule: shrink the pointer, never the fact.** A hook is shortened only
-when its detail is already recoverable from the body. Anything a hook carries
-that the body doesn't (a commit SHA, a `★still-open` note, an `untested` flag)
-would be *lost* by shortening — so those hooks are kept verbatim and flagged,
-not trimmed, and no memory file is edited to "fix" them (that's the human's
-call). This is the lossy op, so it is conservative by construction.
+**The Golden Rule: Shrink the pointer, never the fact.** A hook is shortened only when its detail is already recoverable from the memory file's body. Anything a hook carries that the body does not (a specific commit SHA, a `★still-open` note, an untested flag) would be lost by shortening — so those hooks are kept verbatim and flagged, never trimmed.
 
 ## Steps
 
-1. **Resolve the dir** (`~/.claude/projects/$(pwd | sed 's#/#-#g')/memory/`) and
-   operate on its live `MEMORY.md`.
+1. **Resolve memory directory:**
+   - `.agents/memory/` or `~/.claude/projects/<slug>/memory/`.
 
-2. **Find over-length hooks** — index lines longer than the threshold
-   (default **250 chars**). Report the count and current bytes/lines.
+2. **Find over-length hooks:**
+   Identify index lines longer than 250 characters. Report the count and current size.
 
-3. **Rewrite — CHUNK across parallel `general-purpose` agents.** Reading a body
-   costs ~10–16k tokens/hook, so one agent for a large set blows context/cost
-   (119 hooks ≈ 2M tokens). **>~30 over-length hooks → split the over-length
-   filenames into batches of ~20 and run one agent per batch in parallel**
-   (≤~30 → a single agent is fine). Each agent gets its batch list + an output
-   path `<SCRATCH>/compact_batchN.json` and this prompt (it returns hook **text
-   only** — the `[Title](file.md) — ` prefix is preserved mechanically in step 4,
-   so titles/filenames stay byte-exact):
+3. **Parallel rewrite via Antigravity subagents:**
+   For >20 over-length hooks, partition into batches of ~15–20 files and launch parallel subagents in a single `invoke_subagent` call:
+   - `TypeName`: `"self"`
+   - `Role`: `"Memory Compaction Worker [Batch N]"`
+   - `Model`: `"flash"`
+   - `Prompt`:
 
-   > For each filename in your batch: find its line in `MEMORY.md`
-   > (`grep -F '(FILE)'`), note the old length, open the memory's file and read
-   > the body. Produce a compacted hook — only the text after ` — `:
-   > **≤180 chars** (≤300 if the old full line is >1000, a "giant"), a faithful
-   > pointer **derived from the body** — *only if* every specific the old hook
-   > carries (commit SHAs, `★still-open`/status notes, `untested`, version tags,
-   > counts) is present in the body. If the old hook has anything the body does
-   > **not**, set the value to `"KEEP"`. Write `{FILE: hooktext|"KEEP"}` JSON to
-   > the output path. Edit no memory file. Return one line: `batch N: X, Y kept`.
+   > For each filename in your batch: locate its line in `MEMORY.md` (`grep -F '(FILE)'`), read the memory's body in `<DIR>/<FILE>`, and generate a compacted hook (text after ` — `):
+   > - Target length: **≤180 characters** (≤300 chars for giant hooks >1000 chars).
+   > - Derived directly from the body.
+   > - **Safety check**: If the original hook contains specific facts (SHAs, gotcha notes, versions) NOT present in the body, set the value to `"KEEP"`.
+   > - Write `{FILE: hooktext | "KEEP"}` JSON to `<SCRATCH>/compact_batch_N.json`.
+   > - Do not edit any memory files.
 
-4. **Assemble + verify, or abort.** Merge the batch JSONs into one
-   `{file: hooktext|"KEEP"}` map (assert it covers exactly the over-length set).
-   Build `MEMORY.md.compact` by walking the live `MEMORY.md`: for an over-length
-   hook with a non-KEEP value, splice the **new text onto the original
-   `[Title](file.md) — ` prefix** (titles/filenames byte-exact); KEEP and all
-   short hooks stay verbatim. Then verify the `(file.md)` targets in
-   `MEMORY.md.compact` equal those in the live `MEMORY.md`, each exactly once —
-   compaction changes hook *text*, never membership. If anything dropped/added
-   or a prefix didn't splice cleanly, do not replace; report it.
+4. **Assemble and verify:**
+   Merge batch JSON results.
+   Build `MEMORY.md.compact` by splicing the new hook text onto the original `[Title](file.md) — ` prefixes.
+   Verify that all `(file.md)` targets match the live `MEMORY.md` 1:1.
+   Run canary validation:
+   ```bash
+   python3 ~/.gemini/config/skills/memory-lint/lint.py <DIR> --canary-check MEMORY.md.compact
+   ```
+   If any canary fails or prefixes mismatch, abort and report.
 
-5. **Back up + confirm.** `cp MEMORY.md MEMORY.md.bak-$(date +%Y%m%d)` (skip if
-   today's backup exists). Show: bytes/lines before→after, # compacted,
-   the kept-long list, and 3–4 sample old→new hook diffs. Replace the live index
-   only after the user is happy.
+5. **Backup and confirm:**
+   `cp MEMORY.md MEMORY.md.bak-$(date +%Y%m%d)`.
+   Display before/after size, count of compacted hooks, and sample diffs. Replace live file upon confirmation.
 
-## Notes
+## Claude Code variant
 
-- Body is the source of truth; the hook is a derived pointer. Compaction never
-  invents — a shortened hook can only claim what the body holds.
-- Kept-long hooks are a to-do, not a failure: move their index-only detail into
-  the body, then re-run to compact them — or loosen the threshold.
-- The size lever of the three: `reindex` (structure, lossless) → `memory-compact`
-  (size, body-verified) → `recall` (retrieval). This is the one that targets the
-  loader cap.
-- Default 250→180 chars; tune for gentler or more aggressive.
+The steps above describe the Antigravity harness (`invoke_subagent`, `flash`, `<SCRATCH>`). In Claude Code:
+
+- Workers: the built-in `Agent` tool instead of `invoke_subagent` — `subagent_type: "general-purpose"`, `model: "haiku"`, launched as several parallel Agent calls in **one message** (one per batch of ~15–20 files). Lead each prompt with the role text (`Role` is not a parameter there).
+- Each worker `Write`s the same `{FILE: hooktext | "KEEP"}` JSON to an absolute scratch path outside the memory store (e.g. `/tmp/compact-batch-N.json`) instead of `<SCRATCH>/compact_batch_N.json`.
+- Canary-gate path: `~/.gemini/config/skills/memory-lint/lint.py` → `~/.claude/skills/memory-lint/lint.py` (both are install symlinks to the same file).
+- The parent agent does the splicing, 1:1 verification, backup and replace (steps 4–5) itself — same commands.
+
+The Golden Rule, worker prompt and safety checks are harness-agnostic.

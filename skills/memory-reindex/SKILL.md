@@ -1,100 +1,86 @@
 ---
 name: memory-reindex
-description: Rebuild MEMORY.md as a topically-shelved index — a library classification for the memory store. A subagent assigns every memory file to exactly one topical shelf; the curated one-line hooks are preserved verbatim, and orphan files (present in the store but missing from the index) are found and shelved too. Coverage is verified (every file appears once, no phantom lines), the old index is backed up, and the reorg is shown before replacing. Run when the index is lopsided — giant catch-all buckets, a tail of one-entry sections — or after adding several memories.
+description: Rebuild MEMORY.md as a topically-shelved index and split into a HOT index (auto-loaded) and ARCHIVE.md (cold shelves). Spawns a subagent to classify memories into topical shelves and tiers. Preserves hooks verbatim, verifies 1:1 coverage against filesystem, backs up old index, and validates canaries.
 ---
 
 # memory-reindex
 
-The index drifts: new memories land in a catch-all `## Gotchas` pile, topics
-fragment into one-entry sections, and some files never get an index line at all
-(orphans — invisible to the always-loaded index). This reshelves the whole
-library: every memory under one topical heading, nothing lost.
+As new memories accumulate, they often land in a generic catch-all section or become fragmented. This skill reshelves the entire memory library into clean topical shelves without losing any content or detail.
 
-**Safety stance:** the index is *derived* from the files, so rebuilding it is
-reversible — but the curated hooks are hand-written and must not be paraphrased.
-So hooks are copied **verbatim**; only the *grouping* changes. Never overwrite
-the live index without a backup and a coverage check.
+**Safety stance:** The index is *derived* from the memory files, so rebuilding is reversible — but the curated hooks are hand-written and must not be paraphrased. Hooks are copied **verbatim**; only the *grouping* and *hot/cold tiering* changes. Never overwrite the live index without a backup and a mechanical coverage check.
 
 ## Steps
 
-1. **Resolve the memory dir:** `~/.claude/projects/$(pwd | sed 's#/#-#g')/memory/`.
-   If absent, say so and stop.
+1. **Resolve the memory dir:**
+   - `.agents/memory/` in workspace root, or
+   - `~/.claude/projects/$(git rev-parse --show-toplevel 2>/dev/null | tr '/' '-')/memory/`.
+   If absent, report to the user and stop.
 
-2. **Audit coverage.** List `*.md` (excluding `MEMORY.md`). Extract the
-   `file.md` target from every `- [..](file.md) —` line in the current index.
+2. **Audit current coverage:**
+   List `*.md` files (excluding `MEMORY.md`, `ARCHIVE.md`, `CANDIDATES.md`, `CANARIES.md`). Extract the `file.md` target from every `- [..](file.md) —` line in `MEMORY.md`, `ARCHIVE.md` **and** `CANDIDATES.md` — `CANDIDATES.md` holds the lines `lint --fix` staged for files not yet in the hot index, so they are round-tripped into the rebuilt shelves rather than lost.
    - **Orphans** = files with no index line.
    - **Stale** = index lines whose target file no longer exists.
    Report both counts.
 
-3. **Classify — one `general-purpose` subagent that self-verifies and writes
-   the result to disk** (an `Explore` agent can't, because it can only return
-   text and won't catch its own miscount — observed: a classifier confidently
-   reported "no duplicates, complete coverage" while six files were shelved
-   twice). Prompt it with the dir and:
+3. **Classify via Antigravity subagent:**
+   Spawn a subagent via `invoke_subagent`:
+   - `TypeName`: `"self"`
+   - `Role`: `"Memory Reindex Classifier"`
+   - `Model`: `"flash"` (or `"pro"` for very large stores)
+   - `Prompt`:
 
-   > Assign **every** memory file to exactly **one** topical shelf. Get the
-   > files + signals via `rg -N '^(name|description):' <DIR>/*.md` (ignore
-   > `MEMORY.md`). Shelves emerge from content — aim for ~8–15 real subjects
-   > (terminal/keyboard, proot & local Linux, desktop/GPU, FIDO/security,
-   > networking/transports, email, mesh/Reticulum, release & CI workflow,
-   > collaboration & process, roadmap/upcoming…). No shelf over ~25 (split it);
-   > fold one-offs into a broader shelf, not singletons; `Misc` is a last
-   > resort.
+   > Assign **every** memory file in `<DIR>` to exactly **one** topical shelf.
+   > Scan descriptions via: `rg -N '^(name|description):' <DIR>/*.md` (ignore `MEMORY.md`/`ARCHIVE.md`).
    >
-   > **Before returning, prove coverage against the filesystem and fix any gap
-   > — do not self-report, check:** write your mapping to `<SCRATCH>/shelves.json`
-   > as `{"shelves":[{"name":..,"files":[..]}]}`, then run
-   > `jq -r '.shelves[].files[]' <SCRATCH>/shelves.json | sort` and `comm` it
-   > against `ls <DIR> | grep -v '^MEMORY.md$' | sort`. There must be **zero**
-   > duplicates (`... | uniq -d` empty) and **zero** files only-on-disk and
-   > **zero** entries only-in-json. Iterate until clean.
+   > Shelves emerge from content — aim for ~8–15 substantive subjects (e.g. terminal/UI, proot/Linux, desktop/GPU, security/keys, networking/transports, email, mesh, release/CI workflow, process/collaboration, roadmap…). Avoid singletons; fold one-offs into broader shelves; `Misc` is a last resort.
    >
-   > Once coverage is clean, do ONE cheap extra pass over the **same
-   > descriptions** (don't open every file) and write `<DIR>/CANDIDATES.md` —
-   > the backlog for later, deeper consolidation passes. Two short sections,
-   > each capped at ~8 entries, each item clearly heuristic:
-   > - **Linking candidates** — clusters of 2–5 memories (usually within one
-   >   shelf) that read as the same sub-thread and probably should cross-link
-   >   via `[[wikilinks]]`. List the members + one line on the shared thread.
-   > - **Abstraction candidates** — themes where ≥3 memories share a root cause
-   >   or schema that could collapse into one higher-order memory. List the
-   >   members + a one-line proposed schema (e.g. several "act as the
-   >   maintainer" rules → one rule).
-   > These are advisory only — do NOT modify shelves.json, the index, or any
-   > memory file. Then return: shelf names + counts, the three coverage checks
-   > (all empty), candidate counts, and confirmation both files exist.
+   > Mark every file `"hot"` or `"cold"` (a `tier` field in the shelf mapping):
+   > - **Cold**: Resolved/shipped project history whose hook is a historical record, not an active constraint.
+   > - **Hot**: `user`/`feedback`/`reference` types, recurring work, and any memory whose gotchas still constrain future code. When unsure, mark `hot`.
+   >
+   > **Usage evidence** (if `<DIR>/USAGE.log` exists):
+   > Files with recent `used`/`recalled` activity stay hot. Guard: only demote based on usage if the log has ≥30 days of history.
+   > Files listed in `<DIR>/CANARIES.md` with tier `hot` MUST stay hot regardless.
+   >
+   > **Coverage Gate (Verify mechanically before returning):**
+   > Write your mapping to `<SCRATCH>/shelves.json` as `{"shelves":[{"name": "...", "files": [{"file": "...", "tier": "hot"}]}]}`.
+   > Run:
+   > `jq -r '.shelves[].files[].file' <SCRATCH>/shelves.json | sort`
+   > and `comm` it against `ls <DIR> | grep -vE '^(MEMORY|ARCHIVE|CANDIDATES|CANARIES).md$' | sort`.
+   > There must be **zero** duplicates, **zero** missing files, and **zero** extra files.
+   >
+   > Once coverage is clean, write `<DIR>/CANDIDATES.md` with:
+   > - **Linking candidates**: Clusters of 2–5 memories that share a sub-thread and should cross-link via `[[wikilinks]]`.
+   > - **Abstraction candidates**: Themes where ≥3 memories share a root cause or schema.
+   >
+   > Return: shelf names + counts, confirmation of 100% coverage, and candidate counts.
 
-4. **Assemble `MEMORY.md.new`** mechanically (small script, not by hand):
-   - Preamble: keep the current file's header lines (down to the first `## `).
-   - For each shelf in the subagent's order: emit `## <Shelf>`, then for each
-     file pull its **existing** `- [..](file.md) — ...` line **verbatim** from
-     the old index. For an **orphan** (no old line), read the file and write a
-     fresh `- [Title](file.md) — <hook>` line (≤200 chars). Derive a **short
-     human `[Title]` from the body** (3–8 words, like the other titles) — do NOT
-     use the `name:` slug as the title, or reindex becomes a slug-title factory
-     (lint flags those). The hook is a one-line summary of the body.
-   - Drop **stale** lines (their files are gone).
+4. **Assemble `MEMORY.md.new` + `ARCHIVE.md.new` mechanically:**
+   - `MEMORY.md.new` receives the hot entries of each shelf; `ARCHIVE.md.new` receives the cold ones under matching shelf headers.
+   - Preamble in `MEMORY.md.new`: `Cold entries live in ARCHIVE.md (searched by /recall).`
+   - Pull each existing `- [Title](file.md) — ...` line **verbatim** from the old index.
+   - For an orphan, derive a concise human title and hook from the file.
+   - Drop stale lines.
 
-5. **Verify, or abort.** Assert the set of `file.md` targets in `MEMORY.md.new`
-   equals the set of `*.md` files on disk, each exactly once. If not, do not
-   replace — report the discrepancy.
+5. **Verify and run Canary Gate:**
+   Assert that the union of files across both new index files equals the exact set on disk.
+   Run canary check:
+   ```bash
+   python3 -m memory_lint <DIR> --canary-check MEMORY.md.new ARCHIVE.md.new || python3 ~/.gemini/config/skills/memory-lint/lint.py <DIR> --canary-check MEMORY.md.new ARCHIVE.md.new
+   ```
+   Exit code 1 means a load-bearing entry was dropped or demoted — do not proceed.
 
-6. **Back up + confirm.** `cp MEMORY.md MEMORY.md.bak-$(date +%Y%m%d)`. Show the
-   user: new shelf names + counts, orphans now shelved, stale lines dropped.
-   Replace the live index only after they're happy (first run especially —
-   the classification is unproven until they've seen it).
+6. **Back up and confirm:**
+   `cp MEMORY.md MEMORY.md.bak-$(date +%Y%m%d)` (and `ARCHIVE.md`).
+   Show the summary (shelf counts, hot/cold split, size) and replace the live files upon verification.
 
-## Notes
+## Claude Code variant
 
-- Single shelf per memory (one shelf location); cross-topic links stay as
-  `[[wikilinks]]` in the bodies — that's the catalog cross-reference.
-- This restructures the index only; it never edits or deletes memory files.
-- Pairs with `recall`: reindex keeps the passive index legible; recall does
-  task-targeted retrieval. Different jobs.
-- `CANDIDATES.md` (written beside the index) is the backlog for the deeper
-  consolidation passes this skill *doesn't* do yet — **linking** (wire the
-  `[[links]]` it flags) and **abstraction** (distil a schema across kin). It's
-  heuristic and is **not** loaded into context, so it adds no truncation
-  pressure; build those passes only when the backlog visibly piles up. The
-  triage pass tagging work for the deeper passes mirrors how slow-wave sleep
-  marks what later REM integrates — cheap-frequent feeds deep-rare.
+The steps above describe the Antigravity harness (`invoke_subagent`, `flash`, `~/.gemini/...` paths). In Claude Code:
+
+- Spawn the classifier with the built-in `Agent` tool instead of `invoke_subagent` — `subagent_type: "general-purpose"`, `model: "haiku"` (use `sonnet` for stores over ~150 memories), and lead the prompt with the same role text (`Role` is not a parameter there).
+- The classifier needs **write** permission on the store: it writes `<SCRATCH>/shelves.json` and `<DIR>/CANDIDATES.md` itself. Instruct it to `Write` the files at absolute paths instead of `<SCRATCH>`.
+- Canary gate path: `~/.gemini/config/skills/memory-lint/lint.py` → `~/.claude/skills/memory-lint/lint.py` (both are install symlinks to the same file).
+- The parent agent assembles `MEMORY.md.new` / `ARCHIVE.md.new`, runs the gate, backs up and swaps (steps 4–6) as written.
+
+The shelf rules, tiering and the mechanical coverage gate are unchanged.

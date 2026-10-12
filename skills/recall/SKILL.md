@@ -1,69 +1,65 @@
 ---
 name: recall
-description: Pull the few memory files relevant to a task by having a subagent triage the full memory directory, so the main context gets only the relevant memories instead of the (often truncated) MEMORY.md index. Use before starting a substantive task — especially git/release/workflow actions where a standing instruction may be sitting in an unloaded memory.
+description: Pull the few memory files relevant to a task by having a fast subagent triage the project memory store (.agents/memory/ or legacy ~/.claude/projects/ memory), so the main agent context receives only the relevant procedural constraints instead of a bloated index. Use before starting a substantive task — especially git, release, or workflow actions.
 ---
 
 # recall
 
-The auto-loaded `MEMORY.md` index is truncated when memory grows (it already
-warns past ~200 lines), so a relevant standing instruction can be absent from
-context exactly when it matters. This skill recovers it: a subagent reads the
-*whole* memory directory's frontmatter and returns only the handful that bear
-on the current task — its context absorbs the index, mine stays clean.
+The auto-loaded `MEMORY.md` index can be truncated or omitted when memory grows past token/line budgets, so a relevant standing instruction can be absent from context exactly when it matters. This skill recovers it: a fast subagent reads the *whole* memory directory's frontmatter and returns only the handful that bear on the current task — its context absorbs the search, the parent context stays clean and focused.
 
 ## Steps
 
-1. **Find the task.** Use the argument after `/recall` as the task. If empty,
-   infer it from the most recent user request in this conversation (one line).
+1. **Identify the task.** Use the argument after `/recall` as the task. If empty, infer it from the most recent user request in this conversation (one concise line).
 
-2. **Resolve the memory dir** for the current project:
-   ```
-   ~/.claude/projects/$(pwd | sed 's#/#-#g')/memory/
-   ```
-   (cwd with every `/` → `-`; e.g. `/home/ian/Code/Haven` →
-   `-home-ian-Code-Haven`.) If that directory doesn't exist, tell the user
-   there's no memory store for this project and stop.
+2. **Resolve the memory dir** for the current workspace:
+   - Check `.agents/memory/` in the workspace root.
+   - Check `~/.claude/projects/$(git rev-parse --show-toplevel 2>/dev/null | tr '/' '-')/memory/`.
+   - If neither exists, tell the user there is no memory store for this project and stop. Note: triage reads the *directory*, so memories listed in cold `ARCHIVE.md` are retrieved just like hot ones.
 
-3. **Spawn ONE `Explore` subagent** with this prompt (fill in `<TASK>` and the
-   resolved `<DIR>`):
+3. **Spawn ONE fast triage subagent** via `invoke_subagent`:
+   - `TypeName`: `"research"`
+   - `Role`: `"Memory Triage Researcher"`
+   - `Model`: `"flash"`
+   - `Prompt`:
 
-   > You are triaging a memory store for relevance. The store is `<DIR>` — one
-   > markdown file per memory, each with YAML frontmatter (`name`,
-   > `description`, `metadata.type`).
+   > You are triaging a project memory store for relevance to a task.
+   > The memory store directory is: `<DIR>` (one markdown file per memory, each with YAML frontmatter `name`, `description`, `metadata.type`).
    >
    > Task at hand: **<TASK>**
    >
-   > 1. Read every memory's `description` cheaply in one pass:
-   >    `rg -N '^(name|description):' <DIR>/*.md` (ignore `MEMORY.md`).
-   > 2. Judge *semantic* relevance to the task, not keyword overlap — a memory
-   >    about git branching IS relevant to "commit this" even with no shared
-   >    words. Favour `feedback` and `project` memories that constrain how the
-   >    task should be done.
-   > 3. **Highest priority: memories that govern the *mechanics* of this exact
-   >    action** — for a git task that means where commits go, branch vs.
-   >    main, push policy, attribution, sign-off. These standing procedural
-   >    rules outrank topically-adjacent memories (release notes, CI lint,
-   >    terminology). Don't let a cluster of loud same-topic memories crowd out
-   >    the one plain rule that dictates *how to do the thing*. If such a rule
-   >    exists, it MUST be in your selection.
-   > 4. Select **at most 5** genuinely relevant memories. Returning **zero** is
-   >    correct when nothing applies — do not pad.
+   > 1. Read every memory's `description` cheaply in one pass via Bash:
+   >    `rg -N '^(name|description):' <DIR>/*.md` (ignore `MEMORY.md` and `ARCHIVE.md`).
+   > 2. Judge *semantic* relevance to the task, not just keyword overlap — a memory about git branching IS relevant to "commit this" even with no shared words. Favour `feedback` and `project` memories that constrain how the task should be executed.
+   > 3. **Highest priority: memories that govern the *mechanics* of this exact action** — for a git task, that means where commits go, branch vs. main, push policies, attribution, sign-offs, and auth requirements. These standing procedural rules outrank topically-adjacent informational memories (release notes, CI logs, terminology). If such a governing rule exists, it MUST be in your selection.
+   > 4. Select **at most 5** genuinely relevant memories. Returning **zero** is correct when nothing applies — do not pad.
    > 5. Read each selected file in full and return, per memory:
    >    - its `name`,
-   >    - one line on why it bears on this task,
+   >    - one line explaining why it bears on this task,
    >    - the **verbatim body** (everything below the frontmatter).
+   > 6. Log your selections to the usage log for hindsight data:
+   >    `printf '%s\trecalled\t%s\n' "$(date +%FT%T)" "<file.md>" >> <DIR>/USAGE.log`
    >
-   > Return nothing else — no preamble, no summary of the store.
+   > Return nothing else — no preamble, no general summary of the store.
 
-4. **Apply what comes back.** Surface any binding instruction to the user
-   before acting on the task. Treat memory bodies as *written-at-the-time*
-   facts: if one names a file, flag, or command, verify it still exists before
-   relying on it.
+4. **Apply retrieved constraints.** Surface any binding instruction or policy to the user before acting on the task. Treat memory bodies as *written-at-the-time* facts: if one names a file, flag, or command, verify it still exists before relying on it.
+
+5. **Close the hindsight loop.** If a recalled memory actually changed or guided what you did (blocked a wrong action, supplied the command, set the policy), append a `used` event:
+   ```bash
+   printf '%s\tused\t%s\n' "$(date +%FT%T)" "<file.md>" >> <DIR>/USAGE.log
+   ```
+   `recalled` records retrieval; `used` records impact — reindexing weighs `used` far above `recalled`.
 
 ## Notes
 
-- One subagent, read-only; cost is a single fan-out, not per-turn.
-- This is opt-in, so it only catches what you think to look up. If you find it
-  missing things you didn't know to ask for, the next rung is a
-  `UserPromptSubmit` hook that runs this automatically — don't build that until
-  the misses are measured.
+- One subagent call with `flash` model: fast, low token overhead, zero main-context bloat.
+- Opt-in: call before high-stakes operations (rebases, tag releases, publishing, major refactors).
+
+## Claude Code variant
+
+The steps above describe the Antigravity harness. In Claude Code:
+
+- Spawn the triage researcher with the built-in `Agent` tool instead of `invoke_subagent` — `subagent_type: "general-purpose"`, `model: "haiku"`, prompt unchanged (the `Role`/`TypeName` fields become the first line of the prompt text).
+- The parent receives the researcher's final report as the tool result; apply step 4 and the usage-log loop as written.
+- `rg -N '^(name|description):' <DIR>/*.md` runs the same in the Claude Code Bash shell.
+
+The selection rules (mechanics-outrank-neighbours, at most 5, zero-is-correct) are the point of the skill — keep them verbatim in the prompt.

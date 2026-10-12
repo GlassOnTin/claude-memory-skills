@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
-# Symlink the memory-consolidation skills into ~/.claude/skills/ so edits in this
-# repo are live. Then merge hooks/settings.snippet.json into ~/.claude/settings.json
-# to wire the SessionEnd/SessionStart lifecycle hooks (see README).
+# Symlinks memory skills into:
+# 1. Antigravity Global: ~/.gemini/config/skills/
+# 2. Agent Ecosystem:    ~/.agents/skills/
+# 3. Claude Code:        ~/.claude/skills/
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
-dest="$HOME/.claude/skills"
-mkdir -p "$dest"
-for s in "$here"/skills/*/; do
-  name="$(basename "$s")"
-  rm -rf "$dest/$name"          # replace an existing copy/symlink (avoid ln nesting into a real dir)
-  ln -s "${s%/}" "$dest/$name"
-  echo "linked  $dest/$name -> ${s%/}"
+
+for dest in "$HOME/.gemini/config/skills" "$HOME/.agents/skills" "$HOME/.claude/skills"; do
+  mkdir -p "$dest"
+  for s in "$here"/skills/*/; do
+    name="$(basename "$s")"
+    rm -rf "$dest/$name"
+    ln -s "${s%/}" "$dest/$name"
+    echo "linked  $dest/$name -> ${s%/}"
+  done
 done
+
 echo
-echo "Skills installed. Next: wire the lifecycle hooks by merging"
-echo "  $here/hooks/settings.snippet.json"
-echo "into ~/.claude/settings.json (merge the SessionStart/SessionEnd arrays if you"
-echo "already have a \"hooks\" block). Verify with:"
-echo "  python3 $here/skills/memory-lint/lint.py <memory_dir> --brief"
+echo "Skills installed across Antigravity and Claude Code."
+echo "For Antigravity hooks, merge hooks/agy_hooks.snippet.json into ~/.gemini/config/hooks.json or .agents/hooks.json."
+echo "Verify with:"
+echo "  python3 $here/skills/memory-lint/lint.py --brief"

@@ -37,14 +37,20 @@ $ python3 skills/memory-lint/lint.py <memory_dir> [--fix|--brief]
 
 - `name:` frontmatter **equals the filename-stem** (links resolve against `name:`)
 - every `[[wikilink]]` **resolves** to a real memory
+- `description:` frontmatter **present and non-empty** (orphan staging borrows it)
 - **no slug titles** in the index (`[project_foo.md]` → a human title)
-- the index is **1:1 with the files** (no orphans, no stale lines)
+- the index is **1:1 with the files** (no orphans, no stale or duplicate lines)
+- every index line **parses** as `- [Title](file.md) — hook` (empty hooks/malformed lines are flagged, not rewritten)
 - **no bloated hooks** (hook text ≤ 300 chars)
 
 `--fix` does only the safe, deterministic repairs (normalise `name:`→stem, rewrite
-`[[links]]` to stems), backing up to `<dir>/.backups/` **only when it actually
-changes something**. Coverage / over-length / slug-titles route to
-`reindex`/`compact` — they need judgement, not a blind rewrite. Exit code is 0
+`[[links]]` to stems, drop stale/duplicate index lines, **stage** orphans into
+`CANDIDATES.md` under a dated header), backing up to `<dir>/.backups/` **only when
+it actually changes something** (and keeping the newest 5 backups). It never
+auto-promotes staged lines into the hot index — a file indexed only in
+`CANDIDATES.md` is reported as *staged* and stays pending until a `memory-reindex`
+pass shelves it. Malformed index lines, missing descriptions, over-length hooks
+and slug-titles are flagged with a remedy, never auto-repaired. Exit code is 0
 when clean, 1 on any violation (so it works as a hook or CI gate).
 
 ## Lifecycle hooks (optional, recommended)
@@ -52,15 +58,26 @@ when clean, 1 on any violation (so it works as a hook or CI gate).
 Wire `memory-lint` into Claude Code's session lifecycle so the store
 self-maintains. Merge `hooks/settings.snippet.json` into `~/.claude/settings.json`:
 
-- **SessionEnd** → `lint --fix`: auto-heals name/link drift and appends a
-  timestamped report to `~/.claude/memory-lint.log`. Never fails the session;
-  skips cleanly for projects with no store.
+- **SessionEnd** → `lint --fix`: auto-heals name/link drift, stages orphans into
+  `CANDIDATES.md`, and appends a timestamped report to `~/.claude/memory-lint.log`
+  (the log is trimmed to its newest ~4000 lines past 1 MB). Never fails the
+  session; skips cleanly for projects with no store.
 - **SessionStart** → `lint --brief`: injects a one-line store-health summary into
   the new session's context (e.g. `clean ✓ (165 memories)`), silent when there's
   no store.
 
 So drift is auto-detected, the cheap part auto-repaired, and structural issues
 (coverage/bloat) surfaced for a deliberate `reindex`/`compact`.
+
+## Harnesses
+
+`install.sh` symlinks the skills into `~/.gemini/config/skills/` (Antigravity),
+`~/.agents/skills/` and `~/.claude/skills/` (Claude Code) — one toolkit, both
+harnesses. `lint.py` is harness-agnostic. The other three skills' step bodies
+were written against Antigravity's `invoke_subagent`/"flash" model; each now
+carries a short **"Claude Code variant"** section (`invoke_subagent` → the `Agent`
+tool, `flash` → `haiku`, the `~/.gemini/...` paths → `~/.claude/skills/...`) so
+the mechanics translate 1:1.
 
 ## Install
 

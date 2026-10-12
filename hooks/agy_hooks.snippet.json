@@ -1,0 +1,16 @@
+{
+  "memory-guardian": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "python3 ~/.gemini/config/skills/memory-lint/lint.py --hook-pre-invocation"
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "python3 ~/.gemini/config/skills/memory-lint/lint.py --hook-stop"
+      }
+    ]
+  }
+}

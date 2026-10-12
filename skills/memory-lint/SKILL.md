@@ -1,46 +1,60 @@
 ---
 name: memory-lint
-description: Audit the memory store against its invariants and report violations with the remedy for each — name: equals filename-stem, every [[link]] resolves, no slug titles in the index, the index is 1:1 with the files, no bloated hooks. `--fix` applies only the deterministic repairs (normalise name:→stem, rewrite [[links]] to stems); coverage/over-length/slug-titles route to reindex/compact. Run after manual edits, after adding memories, or as a SessionEnd health check.
+description: Audit the memory store against its invariants and report violations with the remedy for each — name equals filename-stem, every [[link]] resolves, no slug titles in the index, 1:1 file coverage, canary preservation, and hook size limits. Supports --fix for safe automated repairs and integrates with Antigravity lifecycle hooks.
 ---
 
 # memory-lint
 
-The doctor for the store — the one place the invariants the other skills assume
-are actually *asserted*, so drift gets caught instead of silently rotting. The
-deterministic checks live in `lint.py` (don't re-derive them in the model):
+The mechanical doctor for the memory store. It asserts all store invariants so drift is detected and repaired deterministically rather than silently rotting.
 
+## Running the Linter
+
+```bash
+python3 ~/.gemini/config/skills/memory-lint/lint.py [<memory_dir>] [--fix|--brief|--canary-check]   # Antigravity
+python3 ~/.claude/skills/memory-lint/lint.py    [<memory_dir>] [--fix|--brief|--canary-check]   # Claude Code
 ```
-python3 ~/.claude/skills/memory-lint/lint.py <memory_dir> [--fix]
+
+(Both paths are symlinks to the same `lint.py`. If `<memory_dir>` is omitted,
+`lint.py` automatically resolves `.agents/memory/` in the workspace or the
+matching `~/.claude/projects/<slug>/memory/`.)
+
+## Invariants Enforced
+
+| Invariant | Purpose | Remedy |
+| :--- | :--- | :--- |
+| `name:` == filename-stem | `[[links]]` resolve cleanly against stems | `lint.py --fix` |
+| Every `[[link]]` resolves | Prevents dead/dangling cross-references | `lint.py --fix` (auto) / manual |
+| No slug titles in index | Index remains human-readable | `memory-reindex` |
+| Index 1:1 with files | Prevents invisible orphan files or stale links | `lint.py --fix` orphans stage into `CANDIDATES.md`; `memory-reindex` shelves them |
+| `description:` present & non-empty | Orphan staging borrows it for the hook text | write one by hand |
+| Index lines parse | Malformed `- [..](..) — hook` lines would hide as coverage noise | hand-edit or `memory-reindex` |
+| Hook length ceiling | Prevents index bloat | `memory-compact` |
+| Canary retention | Asserts load-bearing rules survive in index | Restore from backup / fix hook |
+
+`--fix` never auto-promotes staged orphans into `MEMORY.md` — a file indexed only
+in `CANDIDATES.md` is reported as *staged* (not a violation) and stays pending
+until a `memory-reindex` pass shelves it. Unparseable index lines and missing
+descriptions are flagged, never auto-rewritten (no data-losing repairs).
+
+## Antigravity Lifecycle Hook Integration
+
+Add to `.agents/hooks.json` or `~/.gemini/config/hooks.json` to enable automated store health checks:
+
+```json
+{
+  "memory-health": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "python3 ~/.gemini/config/skills/memory-lint/lint.py --hook-pre-invocation"
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "python3 ~/.gemini/config/skills/memory-lint/lint.py --hook-stop"
+      }
+    ]
+  }
+}
 ```
-
-Resolve `<memory_dir>` as `~/.claude/projects/$(pwd | sed 's#/#-#g')/memory`.
-Exit 0 = clean, 1 = violations (so it works as a SessionEnd hook / CI gate).
-
-## What it asserts (and the remedy it prints)
-
-| invariant | why | remedy if it fails |
-|---|---|---|
-| `name:` == filename-stem | `[[links]]` resolve against `name:`; one convention only | `lint --fix` |
-| every `[[link]]` resolves | dangling cross-refs are dead | `lint --fix` (auto), else manual for the unresolvable |
-| no slug titles in the index | `[project_foo.md]` is unreadable | `memory-reindex` (orphans) / retitle from body |
-| index 1:1 with files | orphans are invisible, stale lines are dead | `memory-reindex` |
-| no hook text > 300 chars | bloat is what truncates the index | `memory-compact` |
-
-## `--fix` — only the safe, deterministic repairs
-
-Backs up the whole store to `<dir>/.backups/lint-fix-<ts>.tar.gz` first, then:
-- sets every `name:` to its filename-stem,
-- rewrites every `[[link]]` to the target's stem (strips a stray `.md`, and
-  resolves an old kebab/sentence name to its file by **unique** fuzzy match;
-  ambiguous or unmatched links are left and reported).
-
-It deliberately does **not** touch coverage (→ `memory-reindex`), over-length
-hooks (→ `memory-compact`), or slug titles (judgement — retitle from the body).
-So `--fix` is idempotent and never guesses a destructive change.
-
-## Notes
-
-- This encodes the one-off name/link normalisation as a repeatable pass — the
-  convention is now enforceable, not just a cleanup that happened once.
-- Pairs with the others: lint **detects** → reindex (structure) / compact (size)
-  / lint --fix (names+links) **repair**. Run lint last to confirm clean.
