@@ -12,14 +12,13 @@ The auto-loaded `MEMORY.md` index can be truncated or omitted when memory grows 
 1. **Identify the task.** Use the argument after `/recall` as the task. If empty, infer it from the most recent user request in this conversation (one concise line).
 
 2. **Resolve the memory dir** for the current workspace:
-   - Check `.agents/memory/` in the workspace root.
-   - Check `~/.claude/projects/$(git rev-parse --show-toplevel 2>/dev/null | tr '/' '-')/memory/`.
-   - If neither exists, tell the user there is no memory store for this project and stop. Note: triage reads the *directory*, so memories listed in cold `ARCHIVE.md` are retrieved just like hot ones.
+   - Check `.agents/memory/` in the workspace root, or `~/.claude/projects/<slug>/memory/`, walking up parent directories to `$HOME` if a child repository does not have its own store yet (e.g. `python3 -c 'import sys; sys.path.insert(0, "/home/ian/.gemini/config/skills/memory-lint"); import lint; print(lint.find_memory_dir() or "")'`).
+   - If no store exists, tell the user there is no memory store for this project and stop. Note: triage reads the *directory*, so memories listed in cold `ARCHIVE.md` are retrieved just like hot ones.
 
 3. **Spawn ONE fast triage subagent** via `invoke_subagent`:
    - `TypeName`: `"research"`
    - `Role`: `"Memory Triage Researcher"`
-   - `Model`: `"flash"`
+   - `Model`: `"inherit"` (or `"flash"` if explicitly requested)
    - `Prompt`:
 
    > You are triaging a project memory store for relevance to a task.

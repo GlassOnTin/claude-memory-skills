@@ -21,7 +21,7 @@ description: Shrink over-length hooks in the MEMORY.md index while verifying fac
    For >20 over-length hooks, partition into batches of ~15–20 files and launch parallel subagents in a single `invoke_subagent` call:
    - `TypeName`: `"self"`
    - `Role`: `"Memory Compaction Worker [Batch N]"`
-   - `Model`: `"flash"`
+   - `Model`: `"inherit"` (or `"flash"` if explicitly requested)
    - `Prompt`:
 
    > For each filename in your batch: locate its line in `MEMORY.md` (`grep -F '(FILE)'`), read the memory's body in `<DIR>/<FILE>`, and generate a compacted hook (text after ` — `):

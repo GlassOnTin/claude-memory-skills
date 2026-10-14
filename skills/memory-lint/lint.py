@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """memory-lint — assert the memory store's invariants across Antigravity & Claude Code.
 
-Usage:  lint.py [<memory_dir>] [--fix] [--brief] [--canary-check] [--hook-pre-invocation] [--hook-stop]
-  (no dir)              → auto-resolves memory dir (.agents/memory or ~/.claude/projects/<slug>/memory)
+Usage:  lint.py [<memory_dir>] [--fix] [--brief] [--canary-check]
+                [--hook-pre-invocation] [--hook-post-tool] [--hook-stop]
+  (no dir)              → auto-resolves memory dir (.agents/memory or ~/.claude/projects/<slug>/memory,
+                          walking up parent directories to $HOME if the child repo has no own store)
   --fix                 → back up, then apply DETERMINISTIC repairs only:
                           name: → filename-stem, rewrite [[links]] to stems
                           (.md-strip + unique fuzzy match), drop stale/duplicate index
@@ -11,8 +13,9 @@ Usage:  lint.py [<memory_dir>] [--fix] [--brief] [--canary-check] [--hook-pre-in
                           5 lint-fix backups in .backups/.
   --brief               → one-line health summary.
   --canary-check        → verify canaries survive in candidate index files.
-  --hook-pre-invocation → Antigravity PreInvocation hook (reads JSON stdin, returns JSON stdout).
-  --hook-stop           → Antigravity Stop hook (runs safe repairs quietly, returns JSON stdout).
+  --hook-pre-invocation → Antigravity PreInvocation hook (loads MEMORY.md + brief summary once per conversation).
+  --hook-post-tool      → Antigravity/Claude PostToolUse hook (logs view_file/Read of memory files to USAGE.log).
+  --hook-stop           → Antigravity Stop hook (runs safe repairs + logs to ~/.claude/memory-lint.log).
 
 Exit 0 if every invariant passes, 1 if any fails (hook/CI friendly).
 """
@@ -24,6 +27,29 @@ INDEXES = ["MEMORY.md", "ARCHIVE.md", "CANDIDATES.md"]
 SKIP = {"MEMORY.md", "ARCHIVE.md", "CANDIDATES.md", "CANARIES.md"}
 OVER = 300  # hook-text length ceiling (== compact's giant allowance)
 HOTCAP = 24_000  # bytes; loader cap guidance
+
+def _resolve_from_dir(start_dir):
+    """Walk from start_dir up to $HOME looking for a real memory store
+    (.agents/memory/MEMORY.md or ~/.claude/projects/<slug>/memory/MEMORY.md)."""
+    cur = os.path.abspath(start_dir)
+    home = os.path.abspath(os.path.expanduser("~"))
+    visited = set()
+    while cur and cur not in visited:
+        visited.add(cur)
+        cand1 = os.path.join(cur, ".agents", "memory")
+        if os.path.isfile(os.path.join(cand1, "MEMORY.md")):
+            return cand1
+        slug = cur.replace("/", "-")
+        cand2 = os.path.expanduser(f"~/.claude/projects/{slug}/memory")
+        if os.path.isfile(os.path.join(cand2, "MEMORY.md")):
+            return cand2
+        if cur == home or cur == "/":
+            break
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    return None
 
 def find_memory_dir(target=None):
     if target and os.path.isdir(target):
@@ -39,11 +65,13 @@ def find_memory_dir(target=None):
     except Exception:
         root = os.getcwd()
 
-    # 1. Project-local .agents/memory
+    found = _resolve_from_dir(root)
+    if found:
+        return found
+    # Fallback to exact directory even if MEMORY.md isn't created yet but dir has .md files
     cand1 = os.path.join(root, ".agents", "memory")
     if os.path.isdir(cand1):
         return cand1
-    # 2. Legacy Claude store ~/.claude/projects/<slug>/memory
     slug = root.replace("/", "-")
     cand2 = os.path.expanduser(f"~/.claude/projects/{slug}/memory")
     if os.path.isdir(cand2):
@@ -308,20 +336,13 @@ def get_brief_summary():
 
 def hook_target(ws_paths):
     """Hook-mode memory-dir resolution: only accept a REAL store (MEMORY.md
-    present), never the bare workspace root — find_memory_dir() has a bare-dir
-    shortcut for positional targets that would otherwise lint the repo."""
+    present), walking up parent directories if the workspace has no own store."""
     for ws in ws_paths:
-        cand = find_memory_dir(os.path.join(ws, ".agents", "memory"))
-        if cand: break
-        slug = os.path.abspath(ws).replace("/", "-")
-        cand = os.path.expanduser(f"~/.claude/projects/{slug}/memory")
-        if os.path.isdir(cand): break
-        if os.path.exists(os.path.join(ws, "MEMORY.md")):  # ws itself is the store
-            cand = os.path.abspath(ws); break
-    else:
-        return None
-    if cand and os.path.exists(os.path.join(cand, "MEMORY.md")):
-        return cand
+        if os.path.isfile(os.path.join(ws, "MEMORY.md")):
+            return os.path.abspath(ws)
+        cand = _resolve_from_dir(ws)
+        if cand:
+            return cand
     return None
 
 def handle_agy_hook_pre_invocation():
@@ -333,15 +354,76 @@ def handle_agy_hook_pre_invocation():
     if not target_dir or not os.path.isdir(target_dir):
         print(json.dumps({}))
         sys.exit(0)
-    os.chdir(target_dir)
-    r = check()
-    ok = not (r['badname'] or r['danglers'] or r['slug'] or r['orphan'] or r['stale'] or r['dupes'] or r['over'] or r['canary'] or r['nodesc'] or r['mangled']) and r['hotbytes'] <= HOTCAP
-    if not ok:
-        summary = get_brief_summary()
-        out = {"injectSteps": [{"ephemeralMessage": summary}]}
-        print(json.dumps(out))
-    else:
+    # Only inject once per conversation (tracked via sentinel in artifactDirectoryPath)
+    art_dir = payload.get("artifactDirectoryPath", "")
+    sentinel = os.path.join(art_dir, ".memory_injected") if art_dir else None
+    if sentinel and os.path.exists(sentinel):
         print(json.dumps({}))
+        sys.exit(0)
+    os.chdir(target_dir)
+    summary = get_brief_summary()
+    mem_path = os.path.join(target_dir, "MEMORY.md")
+    mem_text = ""
+    if os.path.isfile(mem_path):
+        with open(mem_path, encoding="utf-8", errors="replace") as fh:
+            mem_text = fh.read(HOTCAP)
+    msg = (
+        f"[Memory Store: {target_dir}]\n"
+        f"{summary}\n\n"
+        f"# MEMORY.md (Hot Index)\n{mem_text}"
+    )
+    if sentinel:
+        try:
+            os.makedirs(art_dir, exist_ok=True)
+            with open(sentinel, "w", encoding="utf-8") as fh:
+                fh.write(f"{target_dir}\n")
+        except OSError:
+            pass
+    print(json.dumps({"injectSteps": [{"ephemeralMessage": msg}]}))
+    sys.exit(0)
+
+def handle_agy_hook_post_tool():
+    """Log reads of memory files to USAGE.log (supports Claude Read and Antigravity view_file)."""
+    try:
+        payload = json.load(sys.stdin)
+    except Exception:
+        payload = {}
+    path = (
+        payload.get("tool_input", {}).get("file_path")
+        or payload.get("toolCall", {}).get("args", {}).get("AbsolutePath")
+        or ""
+    )
+    if not path:
+        ts_path = payload.get("transcriptPath", "")
+        if ts_path and os.path.isfile(ts_path):
+            try:
+                with open(ts_path, "rb") as fh:
+                    fh.seek(0, os.SEEK_END)
+                    sz = fh.tell()
+                    fh.seek(max(0, sz - 16384))
+                    lines = fh.read().decode("utf-8", errors="replace").splitlines()
+                for raw in reversed(lines[-15:]):
+                    try:
+                        step = json.loads(raw)
+                    except Exception:
+                        continue
+                    for tc in step.get("tool_calls") or []:
+                        p = (tc.get("args") or tc.get("arguments") or {}).get("AbsolutePath", "")
+                        if p:
+                            path = p
+                            break
+                    if path:
+                        break
+            except OSError:
+                pass
+    m = re.match(r"^(.*/(?:\.claude/projects/[^/]+/memory|\.agents/memory))/([A-Za-z0-9_.\-]+\.md)$", path)
+    if m and m.group(2) not in SKIP:
+        try:
+            with open(os.path.join(m.group(1), "USAGE.log"), "a", encoding="utf-8") as fh:
+                fh.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')}\tread\t{m.group(2)}\n")
+        except OSError:
+            pass
+    print(json.dumps({}))
     sys.exit(0)
 
 def handle_agy_hook_stop():
@@ -352,10 +434,19 @@ def handle_agy_hook_stop():
     target_dir = hook_target(payload.get("workspacePaths", []))
     if target_dir and os.path.isdir(target_dir):
         os.chdir(target_dir)
+        log_path = os.path.expanduser("~/.claude/memory-lint.log")
         try:
-            # do_fix's human summary goes to stderr; hook stdout stays pure JSON
-            with contextlib.redirect_stdout(sys.stderr):
-                do_fix()
+            if os.path.isfile(log_path) and os.path.getsize(log_path) > 1048576:
+                with open(log_path, encoding="utf-8", errors="replace") as fh:
+                    tail = fh.readlines()[-4000:]
+                with open(log_path + ".tmp", "w", encoding="utf-8") as fh:
+                    fh.writelines(tail)
+                os.replace(log_path + ".tmp", log_path)
+            with open(log_path, "a", encoding="utf-8") as log_fh:
+                log_fh.write(f"\n=== {time.strftime('%Y-%m-%dT%H:%M:%S%z')} (agy) ===\n")
+                with contextlib.redirect_stdout(log_fh), contextlib.redirect_stderr(log_fh):
+                    do_fix()
+                    report(check(), target_dir)
         except Exception:
             pass
     print(json.dumps({}))
@@ -364,6 +455,8 @@ def handle_agy_hook_stop():
 def main():
     if "--hook-pre-invocation" in sys.argv:
         handle_agy_hook_pre_invocation()
+    if "--hook-post-tool" in sys.argv:
+        handle_agy_hook_post_tool()
     if "--hook-stop" in sys.argv:
         handle_agy_hook_stop()
 

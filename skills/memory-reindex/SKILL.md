@@ -26,7 +26,7 @@ As new memories accumulate, they often land in a generic catch-all section or be
    Spawn a subagent via `invoke_subagent`:
    - `TypeName`: `"self"`
    - `Role`: `"Memory Reindex Classifier"`
-   - `Model`: `"flash"` (or `"pro"` for very large stores)
+   - `Model`: `"inherit"` (or `"flash"` / `"pro"` if explicitly requested)
    - `Prompt`:
 
    > Assign **every** memory file in `<DIR>` to exactly **one** topical shelf.

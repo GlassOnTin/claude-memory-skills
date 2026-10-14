@@ -6,6 +6,17 @@
         "command": "python3 ~/.gemini/config/skills/memory-lint/lint.py --hook-pre-invocation"
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "view_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.gemini/config/skills/memory-lint/lint.py --hook-post-tool"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "type": "command",
