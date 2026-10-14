@@ -1,6 +1,6 @@
 ---
 name: recall
-description: Pull the few memory files relevant to a task by having a fast subagent triage the project memory store (.agents/memory/ or legacy ~/.claude/projects/ memory), so the main agent context receives only the relevant procedural constraints instead of a bloated index. Use before starting a substantive task — especially git, release, or workflow actions.
+description: Pull the few memory files relevant to a task by having a fast subagent triage the project memory store (.agents/memory/, ~/.gemini/config/projects/, or ~/.claude/projects/), so the main agent context receives only the relevant procedural constraints instead of a bloated index. Use before starting a substantive task — especially git, release, or workflow actions.
 ---
 
 # recall
@@ -12,7 +12,7 @@ The auto-loaded `MEMORY.md` index can be truncated or omitted when memory grows 
 1. **Identify the task.** Use the argument after `/recall` as the task. If empty, infer it from the most recent user request in this conversation (one concise line).
 
 2. **Resolve the memory dir** for the current workspace:
-   - Check `.agents/memory/` in the workspace root, or `~/.claude/projects/<slug>/memory/`, walking up parent directories to `$HOME` if a child repository does not have its own store yet (e.g. `python3 -c 'import sys; sys.path.insert(0, "/home/ian/.gemini/config/skills/memory-lint"); import lint; print(lint.find_memory_dir() or "")'`).
+   - Run `python3 ~/.agents/skills/memory-lint/lint.py --print-dir` (which checks `.agents/memory/`, `~/.gemini/config/projects/<slug>/memory/`, and `~/.claude/projects/<slug>/memory/`, walking up parent directories toward `$HOME`).
    - If no store exists, tell the user there is no memory store for this project and stop. Note: triage reads the *directory*, so memories listed in cold `ARCHIVE.md` are retrieved just like hot ones.
 
 3. **Spawn ONE fast triage subagent** via `invoke_subagent`:

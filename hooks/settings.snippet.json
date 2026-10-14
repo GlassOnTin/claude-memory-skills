@@ -1,11 +1,23 @@
 {
   "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOME/.agents/skills/memory-lint/lint.py\" --hook-post-tool 2>/dev/null || true",
+            "async": true
+          }
+        ]
+      }
+    ],
     "SessionEnd": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "log=\"$HOME/.claude/memory-lint.log\"; if [ -f \"$log\" ] && [ \"$(wc -c < \"$log\")\" -gt 1048576 ]; then tail -n 4000 \"$log\" > \"$log.tmp\" && mv \"$log.tmp\" \"$log\"; fi; { printf '\\n=== %s ===\\n' \"$(date -Iseconds)\"; python3 \"$HOME/.claude/skills/memory-lint/lint.py\" \"$HOME/.claude/projects/$(printf %s \"${CLAUDE_PROJECT_DIR:-$PWD}\" | sed 's#/#-#g')/memory\" --fix; } >> \"$log\" 2>&1 || true"
+            "command": "log=\"$HOME/.agents/memory-lint.log\"; if [ -f \"$log\" ] && [ \"$(wc -c < \"$log\")\" -gt 1048576 ]; then tail -n 4000 \"$log\" > \"$log.tmp\" && mv \"$log.tmp\" \"$log\"; fi; { printf '\\n=== %s ===\\n' \"$(date -Iseconds)\"; python3 \"$HOME/.agents/skills/memory-lint/lint.py\" --fix; } >> \"$log\" 2>&1 || true"
           }
         ]
       }
@@ -15,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/.claude/skills/memory-lint/lint.py\" \"$HOME/.claude/projects/$(printf %s \"${CLAUDE_PROJECT_DIR:-$PWD}\" | sed 's#/#-#g')/memory\" --brief 2>/dev/null || true"
+            "command": "python3 \"$HOME/.agents/skills/memory-lint/lint.py\" --brief 2>/dev/null || true"
           }
         ]
       }

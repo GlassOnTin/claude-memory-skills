@@ -3,7 +3,7 @@
     "PreInvocation": [
       {
         "type": "command",
-        "command": "python3 ~/.gemini/config/skills/memory-lint/lint.py --hook-pre-invocation"
+        "command": "python3 ~/.agents/skills/memory-lint/lint.py --hook-pre-invocation"
       }
     ],
     "PostToolUse": [
@@ -12,7 +12,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/.gemini/config/skills/memory-lint/lint.py --hook-post-tool"
+            "command": "python3 ~/.agents/skills/memory-lint/lint.py --hook-post-tool"
           }
         ]
       }
@@ -20,7 +20,7 @@
     "Stop": [
       {
         "type": "command",
-        "command": "python3 ~/.gemini/config/skills/memory-lint/lint.py --hook-stop"
+        "command": "python3 ~/.agents/skills/memory-lint/lint.py --hook-stop"
       }
     ]
   }

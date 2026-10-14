@@ -12,7 +12,7 @@ description: Shrink over-length hooks in the MEMORY.md index while verifying fac
 ## Steps
 
 1. **Resolve memory directory:**
-   - `.agents/memory/` or `~/.claude/projects/<slug>/memory/`.
+   Run `python3 ~/.agents/skills/memory-lint/lint.py --print-dir` (checks `.agents/memory/`, `~/.gemini/config/projects/<slug>/memory/`, and `~/.claude/projects/<slug>/memory/`, walking up parent directories to `$HOME`).
 
 2. **Find over-length hooks:**
    Identify index lines longer than 250 characters. Report the count and current size.
@@ -37,7 +37,7 @@ description: Shrink over-length hooks in the MEMORY.md index while verifying fac
    Verify that all `(file.md)` targets match the live `MEMORY.md` 1:1.
    Run canary validation:
    ```bash
-   python3 ~/.gemini/config/skills/memory-lint/lint.py <DIR> --canary-check MEMORY.md.compact
+   python3 ~/.agents/skills/memory-lint/lint.py <DIR> --canary-check MEMORY.md.compact
    ```
    If any canary fails or prefixes mismatch, abort and report.
 
@@ -47,11 +47,10 @@ description: Shrink over-length hooks in the MEMORY.md index while verifying fac
 
 ## Claude Code variant
 
-The steps above describe the Antigravity harness (`invoke_subagent`, `flash`, `<SCRATCH>`). In Claude Code:
+The steps above describe the Antigravity harness (`invoke_subagent`, `<SCRATCH>`). In Claude Code:
 
 - Workers: the built-in `Agent` tool instead of `invoke_subagent` — `subagent_type: "general-purpose"`, `model: "haiku"`, launched as several parallel Agent calls in **one message** (one per batch of ~15–20 files). Lead each prompt with the role text (`Role` is not a parameter there).
 - Each worker `Write`s the same `{FILE: hooktext | "KEEP"}` JSON to an absolute scratch path outside the memory store (e.g. `/tmp/compact-batch-N.json`) instead of `<SCRATCH>/compact_batch_N.json`.
-- Canary-gate path: `~/.gemini/config/skills/memory-lint/lint.py` → `~/.claude/skills/memory-lint/lint.py` (both are install symlinks to the same file).
-- The parent agent does the splicing, 1:1 verification, backup and replace (steps 4–5) itself — same commands.
+- The parent agent does the splicing, 1:1 verification, backup and replace (steps 4–5) itself using `python3 ~/.agents/skills/memory-lint/lint.py <DIR> --canary-check MEMORY.md.compact`.
 
 The Golden Rule, worker prompt and safety checks are harness-agnostic.

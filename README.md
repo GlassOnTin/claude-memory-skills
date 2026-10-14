@@ -1,17 +1,18 @@
-# claude-memory-skills
+# memory-skills
 
-A small, self-maintaining toolkit for **Claude Code's file-based memory store** —
-four skills and two lifecycle hooks that keep the always-loaded `MEMORY.md` index
+A small, self-maintaining toolkit for **file-based agent memory stores** (shared across **Antigravity / Gemini** and **Claude Code**) —
+four skills and lifecycle hooks that keep the always-loaded `MEMORY.md` index
 legible, compact, and internally consistent so standing rules don't silently
 vanish when the index grows past the loader cap.
 
-These are generic: they resolve the memory directory from the current project, so
-they work for any project, not a specific one. Nothing here is coupled to a
-particular codebase.
+These are generic: they resolve the memory directory from the current project
+(checking `.agents/memory/`, `~/.gemini/config/projects/<slug>/memory/`, and
+`~/.claude/projects/<slug>/memory/`, walking up parent directories toward `$HOME`),
+so they work for any project and either harness.
 
 ## The problem
 
-Claude Code auto-loads a per-project `MEMORY.md` index every session. As memories
+Agents auto-load a per-project `MEMORY.md` index every session. As memories
 accumulate the index bloats; past a size/line cap the loader **truncates** it —
 so a standing instruction sitting in an unloaded entry is absent from context
 exactly when it matters. (The motivating failure: a "commit on main, don't
@@ -32,7 +33,7 @@ branch" rule was truncated out, and the agent auto-branched against it.)
 ## Invariants `memory-lint` enforces
 
 ```
-$ python3 skills/memory-lint/lint.py <memory_dir> [--fix|--brief]
+$ python3 ~/.agents/skills/memory-lint/lint.py [<memory_dir>] [--fix|--brief|--print-dir]
 ```
 
 - `name:` frontmatter **equals the filename-stem** (links resolve against `name:`)
@@ -55,45 +56,45 @@ when clean, 1 on any violation (so it works as a hook or CI gate).
 
 ## Lifecycle hooks (optional, recommended)
 
-Wire `memory-lint` into Claude Code's session lifecycle so the store
-self-maintains. Merge `hooks/settings.snippet.json` into `~/.claude/settings.json`:
+Wire `memory-lint` into Antigravity (`~/.gemini/config/hooks.json`) and Claude Code
+(`~/.claude/settings.json`) so the store self-maintains across both harnesses:
 
-- **SessionEnd** → `lint --fix`: auto-heals name/link drift, stages orphans into
-  `CANDIDATES.md`, and appends a timestamped report to `~/.claude/memory-lint.log`
-  (the log is trimmed to its newest ~4000 lines past 1 MB). Never fails the
-  session; skips cleanly for projects with no store.
-- **SessionStart** → `lint --brief`: injects a one-line store-health summary into
-  the new session's context (e.g. `clean ✓ (165 memories)`), silent when there's
-  no store.
+- **SessionStart / PreInvocation** → injects a one-line store-health summary
+  (`lint --brief`) and, in Antigravity, injects the project's `MEMORY.md` hot
+  index once per conversation.
+- **PostToolUse (`view_file` / `Read`)** → appends `<timestamp>\tread\t<file.md>`
+  to the store's `USAGE.log` whenever a memory file is read.
+- **SessionEnd / Stop** → `lint --fix`: auto-heals name/link drift, stages orphans
+  into `CANDIDATES.md`, and appends a timestamped report to
+  `~/.agents/memory-lint.log` (trimmed to its newest ~4000 lines past 1 MB).
 
 So drift is auto-detected, the cheap part auto-repaired, and structural issues
 (coverage/bloat) surfaced for a deliberate `reindex`/`compact`.
 
 ## Harnesses
 
-`install.sh` symlinks the skills into `~/.gemini/config/skills/` (Antigravity),
-`~/.agents/skills/` and `~/.claude/skills/` (Claude Code) — one toolkit, both
-harnesses. `lint.py` is harness-agnostic. The other three skills' step bodies
-were written against Antigravity's `invoke_subagent`/"flash" model; each now
-carries a short **"Claude Code variant"** section (`invoke_subagent` → the `Agent`
-tool, `flash` → `haiku`, the `~/.gemini/...` paths → `~/.claude/skills/...`) so
-the mechanics translate 1:1.
+`install.sh` symlinks the skills into `~/.agents/skills/` (shared canonical path),
+`~/.gemini/config/skills/` (Antigravity), and `~/.claude/skills/` (Claude Code),
+and installs `hooks/agy_hooks.snippet.json` into `~/.gemini/config/hooks.json` —
+one toolkit, both harnesses. `lint.py` is harness-agnostic. The other three skills
+describe both Antigravity (`invoke_subagent`) and Claude Code (`Agent` tool)
+invocation mechanics so they translate 1:1.
 
 ## Install
 
 ```sh
-./install.sh          # symlinks skills/* into ~/.claude/skills/
+./install.sh          # symlinks skills/* into ~/.agents/skills/, ~/.gemini/config/skills/, and ~/.claude/skills/
 ```
 
-Then merge `hooks/settings.snippet.json` into `~/.claude/settings.json` (it adds a
-`hooks` block; if you already have one, merge the `SessionStart`/`SessionEnd`
-arrays by hand).
+For Claude Code hooks, merge `hooks/settings.snippet.json` into `~/.claude/settings.json`.
 
 ## Memory-store contract
 
-The skills assume the standard Claude Code layout:
+The skills resolve the store directory in order (walking up parent directories to `$HOME`):
 
-- store dir: `~/.claude/projects/<cwd-with-slashes-as-dashes>/memory/`
+- `.agents/memory/` in the project/workspace root
+- `~/.gemini/config/projects/<cwd-with-slashes-as-dashes>/memory/`
+- `~/.claude/projects/<cwd-with-slashes-as-dashes>/memory/`
 - one markdown file per memory, frontmatter `name` / `description` / `metadata.type`
   (`user` | `feedback` | `project` | `reference`)
 - `MEMORY.md` is the index: `## Shelf` headers, then one

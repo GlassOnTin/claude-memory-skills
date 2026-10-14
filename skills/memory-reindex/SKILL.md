@@ -12,8 +12,7 @@ As new memories accumulate, they often land in a generic catch-all section or be
 ## Steps
 
 1. **Resolve the memory dir:**
-   - `.agents/memory/` in workspace root, or
-   - `~/.claude/projects/$(git rev-parse --show-toplevel 2>/dev/null | tr '/' '-')/memory/`.
+   Run `python3 ~/.agents/skills/memory-lint/lint.py --print-dir` (checks `.agents/memory/`, `~/.gemini/config/projects/<slug>/memory/`, and `~/.claude/projects/<slug>/memory/`, walking up parent directories to `$HOME`).
    If absent, report to the user and stop.
 
 2. **Audit current coverage:**
@@ -66,7 +65,7 @@ As new memories accumulate, they often land in a generic catch-all section or be
    Assert that the union of files across both new index files equals the exact set on disk.
    Run canary check:
    ```bash
-   python3 -m memory_lint <DIR> --canary-check MEMORY.md.new ARCHIVE.md.new || python3 ~/.gemini/config/skills/memory-lint/lint.py <DIR> --canary-check MEMORY.md.new ARCHIVE.md.new
+   python3 ~/.agents/skills/memory-lint/lint.py <DIR> --canary-check MEMORY.md.new ARCHIVE.md.new
    ```
    Exit code 1 means a load-bearing entry was dropped or demoted — do not proceed.
 
@@ -76,11 +75,10 @@ As new memories accumulate, they often land in a generic catch-all section or be
 
 ## Claude Code variant
 
-The steps above describe the Antigravity harness (`invoke_subagent`, `flash`, `~/.gemini/...` paths). In Claude Code:
+The steps above describe the Antigravity harness (`invoke_subagent`, `<SCRATCH>`). In Claude Code:
 
 - Spawn the classifier with the built-in `Agent` tool instead of `invoke_subagent` — `subagent_type: "general-purpose"`, `model: "haiku"` (use `sonnet` for stores over ~150 memories), and lead the prompt with the same role text (`Role` is not a parameter there).
 - The classifier needs **write** permission on the store: it writes `<SCRATCH>/shelves.json` and `<DIR>/CANDIDATES.md` itself. Instruct it to `Write` the files at absolute paths instead of `<SCRATCH>`.
-- Canary gate path: `~/.gemini/config/skills/memory-lint/lint.py` → `~/.claude/skills/memory-lint/lint.py` (both are install symlinks to the same file).
-- The parent agent assembles `MEMORY.md.new` / `ARCHIVE.md.new`, runs the gate, backs up and swaps (steps 4–6) as written.
+- The parent agent assembles `MEMORY.md.new` / `ARCHIVE.md.new`, runs `python3 ~/.agents/skills/memory-lint/lint.py <DIR> --canary-check`, backs up and swaps (steps 4–6) as written.
 
 The shelf rules, tiering and the mechanical coverage gate are unchanged.

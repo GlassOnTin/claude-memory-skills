@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """memory-lint — assert the memory store's invariants across Antigravity & Claude Code.
 
-Usage:  lint.py [<memory_dir>] [--fix] [--brief] [--canary-check]
+Usage:  lint.py [<memory_dir>] [--fix] [--brief] [--print-dir] [--canary-check]
                 [--hook-pre-invocation] [--hook-post-tool] [--hook-stop]
-  (no dir)              → auto-resolves memory dir (.agents/memory or ~/.claude/projects/<slug>/memory,
-                          walking up parent directories to $HOME if the child repo has no own store)
+  (no dir)              → auto-resolves memory dir (.agents/memory, ~/.gemini/config/projects/<slug>/memory,
+                          or ~/.claude/projects/<slug>/memory, walking up parent directories to $HOME)
   --fix                 → back up, then apply DETERMINISTIC repairs only:
                           name: → filename-stem, rewrite [[links]] to stems
                           (.md-strip + unique fuzzy match), drop stale/duplicate index
@@ -12,10 +12,11 @@ Usage:  lint.py [<memory_dir>] [--fix] [--brief] [--canary-check]
                           (never auto-promoted into MEMORY.md); keeps the newest
                           5 lint-fix backups in .backups/.
   --brief               → one-line health summary.
+  --print-dir           → print resolved memory store directory path and exit.
   --canary-check        → verify canaries survive in candidate index files.
   --hook-pre-invocation → Antigravity PreInvocation hook (loads MEMORY.md + brief summary once per conversation).
   --hook-post-tool      → Antigravity/Claude PostToolUse hook (logs view_file/Read of memory files to USAGE.log).
-  --hook-stop           → Antigravity Stop hook (runs safe repairs + logs to ~/.claude/memory-lint.log).
+  --hook-stop           → Antigravity Stop hook (runs safe repairs + logs to ~/.agents/memory-lint.log).
 
 Exit 0 if every invariant passes, 1 if any fails (hook/CI friendly).
 """
@@ -28,21 +29,25 @@ SKIP = {"MEMORY.md", "ARCHIVE.md", "CANDIDATES.md", "CANARIES.md"}
 OVER = 300  # hook-text length ceiling (== compact's giant allowance)
 HOTCAP = 24_000  # bytes; loader cap guidance
 
+def _candidate_dirs(cur):
+    slug = cur.replace("/", "-")
+    return (
+        os.path.join(cur, ".agents", "memory"),
+        os.path.expanduser(f"~/.gemini/config/projects/{slug}/memory"),
+        os.path.expanduser(f"~/.claude/projects/{slug}/memory"),
+    )
+
 def _resolve_from_dir(start_dir):
     """Walk from start_dir up to $HOME looking for a real memory store
-    (.agents/memory/MEMORY.md or ~/.claude/projects/<slug>/memory/MEMORY.md)."""
+    (.agents/memory, ~/.gemini/config/projects/<slug>/memory, or ~/.claude/projects/<slug>/memory)."""
     cur = os.path.abspath(start_dir)
     home = os.path.abspath(os.path.expanduser("~"))
     visited = set()
     while cur and cur not in visited:
         visited.add(cur)
-        cand1 = os.path.join(cur, ".agents", "memory")
-        if os.path.isfile(os.path.join(cand1, "MEMORY.md")):
-            return cand1
-        slug = cur.replace("/", "-")
-        cand2 = os.path.expanduser(f"~/.claude/projects/{slug}/memory")
-        if os.path.isfile(os.path.join(cand2, "MEMORY.md")):
-            return cand2
+        for cand in _candidate_dirs(cur):
+            if os.path.isfile(os.path.join(cand, "MEMORY.md")):
+                return cand
         if cur == home or cur == "/":
             break
         parent = os.path.dirname(cur)
@@ -68,14 +73,10 @@ def find_memory_dir(target=None):
     found = _resolve_from_dir(root)
     if found:
         return found
-    # Fallback to exact directory even if MEMORY.md isn't created yet but dir has .md files
-    cand1 = os.path.join(root, ".agents", "memory")
-    if os.path.isdir(cand1):
-        return cand1
-    slug = root.replace("/", "-")
-    cand2 = os.path.expanduser(f"~/.claude/projects/{slug}/memory")
-    if os.path.isdir(cand2):
-        return cand2
+    # Fallback to exact directory even if MEMORY.md isn't created yet
+    for cand in _candidate_dirs(root):
+        if os.path.isdir(cand):
+            return cand
     return None
 
 def files():   return [f for f in os.listdir(".") if f.endswith(".md") and f not in SKIP]
@@ -416,7 +417,7 @@ def handle_agy_hook_post_tool():
                         break
             except OSError:
                 pass
-    m = re.match(r"^(.*/(?:\.claude/projects/[^/]+/memory|\.agents/memory))/([A-Za-z0-9_.\-]+\.md)$", path)
+    m = re.match(r"^(.*/(?:\.(?:claude|gemini/config)/projects/[^/]+/memory|\.agents/memory))/([A-Za-z0-9_.\-]+\.md)$", path)
     if m and m.group(2) not in SKIP:
         try:
             with open(os.path.join(m.group(1), "USAGE.log"), "a", encoding="utf-8") as fh:
@@ -434,8 +435,9 @@ def handle_agy_hook_stop():
     target_dir = hook_target(payload.get("workspacePaths", []))
     if target_dir and os.path.isdir(target_dir):
         os.chdir(target_dir)
-        log_path = os.path.expanduser("~/.claude/memory-lint.log")
+        log_path = os.path.expanduser("~/.agents/memory-lint.log")
         try:
+            os.makedirs(os.path.dirname(log_path), exist_ok=True)
             if os.path.isfile(log_path) and os.path.getsize(log_path) > 1048576:
                 with open(log_path, encoding="utf-8", errors="replace") as fh:
                     tail = fh.readlines()[-4000:]
@@ -463,6 +465,11 @@ def main():
     pos = [a for a in sys.argv[1:] if not a.startswith("--")]
     target = pos[0] if pos else None
     mem_dir = find_memory_dir(target)
+    if "--print-dir" in sys.argv:
+        if mem_dir and os.path.isdir(mem_dir):
+            print(mem_dir)
+            sys.exit(0)
+        sys.exit(1)
     if not mem_dir or not os.path.isdir(mem_dir):
         if "--brief" not in sys.argv:
             print(f"memory-lint: no memory store found — skipping")

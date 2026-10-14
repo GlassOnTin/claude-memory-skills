@@ -10,13 +10,13 @@ The mechanical doctor for the memory store. It asserts all store invariants so d
 ## Running the Linter
 
 ```bash
-python3 ~/.gemini/config/skills/memory-lint/lint.py [<memory_dir>] [--fix|--brief|--canary-check]   # Antigravity
-python3 ~/.claude/skills/memory-lint/lint.py    [<memory_dir>] [--fix|--brief|--canary-check]   # Claude Code
+python3 ~/.agents/skills/memory-lint/lint.py [<memory_dir>] [--fix|--brief|--print-dir|--canary-check]
 ```
 
-(Both paths are symlinks to the same `lint.py`. If `<memory_dir>` is omitted,
-`lint.py` automatically resolves `.agents/memory/` in the workspace or the
-matching `~/.claude/projects/<slug>/memory/`.)
+(`~/.agents/skills/`, `~/.gemini/config/skills/`, and `~/.claude/skills/` all
+symlink to the same `lint.py`. If `<memory_dir>` is omitted, `lint.py`
+automatically resolves `.agents/memory/`, `~/.gemini/config/projects/<slug>/memory/`,
+or `~/.claude/projects/<slug>/memory/`, walking up parent directories to `$HOME`.)
 
 ## Invariants Enforced
 
@@ -38,21 +38,32 @@ descriptions are flagged, never auto-rewritten (no data-losing repairs).
 
 ## Antigravity Lifecycle Hook Integration
 
-Add to `.agents/hooks.json` or `~/.gemini/config/hooks.json` to enable automated store health checks:
+Installed by `./install.sh` into `~/.gemini/config/hooks.json` (or `.agents/hooks.json`):
 
 ```json
 {
-  "memory-health": {
+  "memory-guardian": {
     "PreInvocation": [
       {
         "type": "command",
-        "command": "python3 ~/.gemini/config/skills/memory-lint/lint.py --hook-pre-invocation"
+        "command": "python3 ~/.agents/skills/memory-lint/lint.py --hook-pre-invocation"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "view_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.agents/skills/memory-lint/lint.py --hook-post-tool"
+          }
+        ]
       }
     ],
     "Stop": [
       {
         "type": "command",
-        "command": "python3 ~/.gemini/config/skills/memory-lint/lint.py --hook-stop"
+        "command": "python3 ~/.agents/skills/memory-lint/lint.py --hook-stop"
       }
     ]
   }
